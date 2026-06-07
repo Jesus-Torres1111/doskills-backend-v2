@@ -490,4 +490,39 @@ const obtenerListaTemas = async (req, res) => {
   }
 };
 
-module.exports = { subirPlanAnual, obtenerAvance, obtenerListaTemas };
+// 🟢 4. ELIMINAR PLAN ANUAL (Vaciado completo por Empresa)
+const vaciarPlanAnual = async (req, res) => {
+  try {
+    // Auditores no pueden borrar
+    if (req.user?.rol === "Auditor") {
+      return res.status(403).json({
+        error:
+          "Acceso denegado: Los auditores no pueden eliminar el plan anual",
+      });
+    }
+
+    const id_empresa = req.user?.id_empresa;
+
+    // Si no hay empresa (algo raro, pero por si acaso)
+    if (!id_empresa) {
+      return res
+        .status(400)
+        .json({ error: "No se identificó la empresa del usuario." });
+    }
+
+    // Borramos TODOS los planes pertenecientes a la empresa del usuario
+    const resultado = await prisma.planAnual.deleteMany({
+      where: { id_empresa },
+    });
+
+    res.json({
+      mensaje: "Plan anual eliminado correctamente.",
+      registrosEliminados: resultado.count,
+    });
+  } catch (error) {
+    console.error("Error vaciando plan anual:", error);
+    res.status(500).json({ error: "Error al intentar vaciar el plan anual." });
+  }
+};
+
+module.exports = { subirPlanAnual, obtenerAvance, obtenerListaTemas, vaciarPlanAnual };

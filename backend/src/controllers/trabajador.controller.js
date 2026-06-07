@@ -4,19 +4,16 @@ const prisma = require("../utils/db");
 const path = require("path");
 const XLSX = require("xlsx");
 const fs = require("fs");
-// 🟢 1. IMPORTAMOS LA UTILIDAD DE FIREBASE
 const {
   uploadFromBuffer,
   uploadFromBase64,
 } = require("../utils/uploadToFirebase");
 
-// 1. LISTAR TODOS (Filtrado por Empresa)
+// 1. LISTAR TODOS
 const obtenerTrabajadores = async (req, res) => {
   try {
     const rol = req.user?.rol;
     const id_empresa = req.user?.id_empresa;
-
-    // 🟢 NUEVO: SOPORTE ve todo, el resto ve solo su empresa
     const filtro = rol === "SOPORTE" ? {} : { id_empresa };
 
     const trabajadores = await prisma.trabajadores.findMany({
@@ -34,8 +31,6 @@ const getTrabajadoresSelect = async (req, res) => {
   try {
     const rol = req.user?.rol;
     const id_empresa = req.user?.id_empresa;
-
-    // 🟢 NUEVO: Aplicamos el filtro también aquí
     const filtro =
       rol === "SOPORTE" ? { estado: true } : { estado: true, id_empresa };
 
@@ -74,10 +69,9 @@ const buscarPorDNI = async (req, res) => {
   }
 };
 
-// 🟢 3. GUARDAR (CREAR O ACTUALIZAR)
+// 3. GUARDAR (CREAR O ACTUALIZAR)
 const guardarTrabajador = async (req, res) => {
   try {
-    // Agregamos id_empresa por si SOPORTE lo manda en el formulario
     const {
       dni,
       nombres,
@@ -88,29 +82,19 @@ const guardarTrabajador = async (req, res) => {
       firma_url,
       id_empresa,
     } = req.body;
+    if (!nombres || !apellidos)
+      return res.status(400).json({ error: "Faltan datos." });
 
-    if (!nombres || !apellidos) {
-      return res
-        .status(400)
-        .json({ error: "Se requieren nombres y apellidos por separado." });
-    }
-
-    // 🟢 NUEVO: Determinar a qué empresa pertenece el nuevo trabajador
     const empresaDestino =
       req.user?.rol === "SOPORTE" && id_empresa
         ? Number(id_empresa)
         : req.user?.id_empresa || 1;
-
     let urlFinal = firma_url;
 
     if (firma_url && firma_url.startsWith("data:image")) {
-      console.log("✍️ Subiendo firma dibujada...");
       const upload = await uploadFromBase64(firma_url, "firmas_trabajadores");
       urlFinal = upload.secure_url;
-    }
-
-    if (req.file) {
-      console.log("📤 Subiendo firma como archivo...");
+    } else if (req.file) {
       const upload = await uploadFromBuffer(
         req.file.buffer,
         "firmas_trabajadores",
@@ -127,6 +111,7 @@ const guardarTrabajador = async (req, res) => {
         cargo,
         genero,
         firma_url: urlFinal,
+        estado: true, // 🟢 REACTIVA AL TRABAJADOR SI ESTABA INACTIVO
       },
       create: {
         dni,
@@ -136,49 +121,78 @@ const guardarTrabajador = async (req, res) => {
         cargo,
         genero,
         firma_url: urlFinal,
-        id_empresa: empresaDestino, // 🟢 NUEVO: Lo vinculamos a la empresa
+        id_empresa: empresaDestino,
+        estado: true,
       },
     });
-
     res.json(trabajador);
   } catch (error) {
-    console.error("Error al guardar:", error);
     res.status(500).json({ error: "Error al guardar trabajador" });
   }
 };
 
-// 4. ELIMINAR
+// 4. ELIMINAR UNO SOLO (AHORA DESACTIVA)
 const eliminarTrabajador = async (req, res) => {
   try {
     const { id } = req.params;
-    await prisma.trabajadores.delete({
+    await prisma.trabajadores.update({
       where: { id_trabajador: Number(id) },
+      data: { estado: false }, // 🟢 BORRADO LÓGICO
     });
-    res.json({ message: "Eliminado correctamente" });
+    res.json({ message: "Desactivado correctamente" });
   } catch (error) {
-    res.status(500).json({
-      error: "Error al eliminar. Puede tener capacitaciones asociadas.",
+    res.status(500).json({ error: "Error al desactivar." });
+  }
+};
+
+// 4.1. VACIAR TODOS (AHORA DESACTIVA)
+const vaciarTrabajadores = async (req, res) => {
+  try {
+    const id_empresa = req.user?.id_empresa;
+    const resultado = await prisma.trabajadores.updateMany({
+      where: { id_empresa, estado: true },
+      data: { estado: false }, // 🟢 BORRADO LÓGICO MASIVO
     });
+    res.json({
+      mensaje: "Todos los trabajadores han sido desactivados.",
+      registrosEliminados: resultado.count,
+    });
+  } catch (error) {
+    res.status(500).json({ error: "Error al vaciar trabajadores." });
+  }
+};
+
+// 4.2. ELIMINAR MÚLTIPLES (AHORA DESACTIVA)
+const eliminarVariosTrabajadores = async (req, res) => {
+  try {
+    const { ids } = req.body;
+    const id_empresa = req.user?.id_empresa;
+    const resultado = await prisma.trabajadores.updateMany({
+      where: { id_trabajador: { in: ids }, id_empresa: id_empresa },
+      data: { estado: false }, // 🟢 BORRADO LÓGICO POR LOTE
+    });
+    res.json({
+      mensaje: `${resultado.count} desactivados correctamente.`,
+      registrosEliminados: resultado.count,
+    });
+  } catch (error) {
+    res.status(500).json({ error: "Error al eliminar seleccionados." });
   }
 };
 
 // 5. CARGA MASIVA DE FIRMAS
 const cargaMasivaFirmas = async (req, res) => {
   try {
-    const archivos = req.files; // Ahora son buffers en memoria
-
+    const archivos = req.files;
     if (!archivos || archivos.length === 0) {
       return res.status(400).json({ error: "No se enviaron archivos." });
     }
 
-    // 🟢 NUEVO: Determinar la empresa para la ruta de Firebase
     const { id_empresa } = req.body;
     const empresaDestino =
       req.user?.rol === "SOPORTE" && id_empresa
         ? Number(id_empresa)
         : req.user?.id_empresa || 1;
-
-    // 🟢 NUEVO: Construir la ruta dinámica
     const folderPath = `empresas/empresa_${empresaDestino}/firmas_trabajadores`;
 
     let actualizados = 0;
@@ -190,7 +204,6 @@ const cargaMasivaFirmas = async (req, res) => {
         const dniExtraido = path.parse(nombreOriginal).name;
 
         if (/^\d{8}$/.test(dniExtraido)) {
-          // 🟢 Subir a Firebase en la ruta de la empresa
           const result = await uploadFromBuffer(
             archivo.buffer,
             folderPath,
@@ -198,20 +211,13 @@ const cargaMasivaFirmas = async (req, res) => {
           );
           const urlPublica = result.secure_url;
 
-          // Actualizamos asegurando que el trabajador sea de esa empresa
           const resultado = await prisma.trabajadores.updateMany({
-            where: {
-              dni: dniExtraido,
-              id_empresa: empresaDestino, // Candado de seguridad Multi-Tenant
-            },
+            where: { dni: dniExtraido, id_empresa: empresaDestino },
             data: { firma_url: urlPublica },
           });
 
-          if (resultado.count > 0) {
-            actualizados++;
-          } else {
-            errores++;
-          }
+          if (resultado.count > 0) actualizados++;
+          else errores++;
         } else {
           errores++;
         }
@@ -233,13 +239,12 @@ const cargaMasivaFirmas = async (req, res) => {
   }
 };
 
-// 🟢 6. IMPORTAR EXCEL INTELIGENTE (MEJORADO PARA PATERNO + MATERNO)
+// 🟢 6. IMPORTAR EXCEL INTELIGENTE (MEJORADO PARA DUPLICADOS Y COLUMNAS UNIDAS)
 const importarExcelInteligente = async (req, res) => {
   try {
     if (!req.file)
       return res.status(400).json({ error: "Sube un archivo Excel (.xlsx)" });
 
-    // 🟢 NUEVO: Determinar empresa para todos los trabajadores del Excel
     const id_empresa_body = req.body.id_empresa;
     const empresaDestino =
       req.user?.rol === "SOPORTE" && id_empresa_body
@@ -247,28 +252,61 @@ const importarExcelInteligente = async (req, res) => {
         : req.user?.id_empresa || 1;
 
     const workbook = XLSX.read(req.file.buffer, { type: "buffer" });
-    const sheetName = workbook.SheetNames[0];
-    const sheet = workbook.Sheets[sheetName];
-    const rawData = XLSX.utils.sheet_to_json(sheet, { header: 1 });
 
-    if (rawData.length < 2)
-      return res.status(400).json({ error: "El Excel está vacío" });
+    // --- 🟢 INICIO DE LA LÓGICA DE BÚSQUEDA DE HOJA INTELIGENTE ---
+    let rawData = [];
+    let headers = [];
 
-    const headers = rawData[0].map((h) =>
-      String(h)
-        .toLowerCase()
-        .trim()
-        .normalize("NFD")
-        .replace(/[\u0300-\u036f]/g, ""),
-    );
+    for (const sheetName of workbook.SheetNames) {
+      const sheet = workbook.Sheets[sheetName];
+      const tempRawData = XLSX.utils.sheet_to_json(sheet, { header: 1 });
+
+      if (tempRawData.length < 2) continue;
+
+      // Normalizar cabeceras temporales para analizarlas
+      const tempHeaders = tempRawData[0].map((h) =>
+        String(h)
+          .toLowerCase()
+          .trim()
+          .normalize("NFD")
+          .replace(/[\u0300-\u036f]/g, "")
+          .replace(/\s+/g, ""),
+      );
+
+      // Verificamos qué tipo de hoja es
+      const tieneDNI = tempHeaders.some((h) =>
+        ["dni", "documento", "codigogeneral"].some((k) => h.includes(k)),
+      );
+      const tieneNombres = tempHeaders.some((h) =>
+        ["nombre", "apellido", "colaborador"].some((k) => h.includes(k)),
+      );
+      const esTablaDinamica = tempHeaders.some(
+        (h) => h.includes("cuenta") || h.includes("etiquetas"),
+      );
+
+      // Si tiene DNI, tiene Nombres y NO es un resumen/tabla dinámica, es la hoja correcta
+      if (tieneDNI && tieneNombres && !esTablaDinamica) {
+        rawData = tempRawData;
+        headers = tempHeaders;
+        break;
+      }
+    }
+
+    if (rawData.length < 2) {
+      return res
+        .status(400)
+        .json({
+          error:
+            "No se encontró una hoja válida con datos reales de trabajadores.",
+        });
+    }
+    // --- 🟢 FIN DE LA BÚSQUEDA DE HOJA ---
+
     const findCol = (keywords) =>
       headers.findIndex((h) => keywords.some((k) => h.includes(k)));
 
+    // DICCIONARIOS DE BÚSQUEDA AMPLIADOS
     const idxDNI = findCol(["dni", "documento", "cedula", "codigogeneral"]);
-    const idxNombres = findCol(["nombres", "nombre", "colaborador"]);
-    const idxApellidosGeneral = findCol(["apellidos", "apellido"]);
-    const idxPaterno = findCol(["paterno"]);
-    const idxMaterno = findCol(["materno"]);
     const idxArea = findCol([
       "area",
       "unidad",
@@ -280,11 +318,20 @@ const importarExcelInteligente = async (req, res) => {
     const idxGenero = findCol(["genero", "sexo"]);
     const idxCategoria = findCol(["categoria", "grupo"]);
 
+    // Nombres y Apellidos
+    const idxNombres = findCol(["nombres", "nombre", "colaborador"]);
+    const idxApellidosGeneral = findCol(["apellidos", "apellido"]);
+    const idxPaterno = findCol(["paterno"]);
+    const idxMaterno = findCol(["materno"]);
+    const idxApellidosNombresUnido = findCol([
+      "apellidosynombres",
+      "nombresyapellidos",
+    ]);
+
     if (idxDNI === -1)
       return res.status(400).json({ error: "No encontré columna DNI" });
 
-    let procesados = 0;
-    let errores = 0;
+    const trabajadoresMap = new Map();
 
     for (let i = 1; i < rawData.length; i++) {
       const row = rawData[i];
@@ -292,35 +339,58 @@ const importarExcelInteligente = async (req, res) => {
 
       let dni = row[idxDNI];
       if (dni) dni = String(dni).replace(/\D/g, "").padStart(8, "0");
-      if (!dni || dni.length < 8) {
-        errores++;
-        continue;
-      }
+      if (!dni || dni.length < 8) continue; // Ignoramos DNI inválidos
 
       let nombres = "SIN NOMBRE";
       let apellidos = "SIN APELLIDO";
 
-      if (idxNombres !== -1) nombres = row[idxNombres] || nombres;
+      // 🟢 LÓGICA DE EXTRACCIÓN DE NOMBRES/APELLIDOS (Prioridades)
+      if (idxApellidosNombresUnido !== -1 && row[idxApellidosNombresUnido]) {
+        // CASO A: Vienen juntos en "Apellidos y Nombres" (Ej: "DIAZ VALLADOLID OSCAR SANTIAGO")
+        const nombreCompleto = String(row[idxApellidosNombresUnido]).trim();
+        const partes = nombreCompleto.split(" ").filter((p) => p.length > 0);
 
-      if (idxPaterno !== -1 && idxMaterno !== -1) {
-        const p = String(row[idxPaterno] || "").trim();
-        const m = String(row[idxMaterno] || "").trim();
-        apellidos = `${p} ${m}`.trim();
-      } else if (idxApellidosGeneral !== -1) {
-        apellidos = String(row[idxApellidosGeneral] || "").trim();
-        if (apellidos === "" && idxNombres !== -1) {
-          const completo = String(row[idxNombres]).trim();
-          if (completo.includes(",")) {
-            apellidos = completo.split(",")[0].trim();
-            nombres = completo.split(",")[1].trim();
-          }
+        if (partes.length >= 4) {
+          apellidos = `${partes[0]} ${partes[1]}`;
+          nombres = partes.slice(2).join(" ");
+        } else if (partes.length === 3) {
+          apellidos = `${partes[0]} ${partes[1]}`;
+          nombres = partes[2];
+        } else if (partes.length === 2) {
+          apellidos = partes[0];
+          nombres = partes[1];
+        } else {
+          apellidos = partes[0] || "SIN APELLIDO";
+          nombres = "SIN NOMBRE";
         }
-      } else if (idxPaterno !== -1) {
-        apellidos = String(row[idxPaterno] || "").trim();
+      } else {
+        // CASO B: Vienen separados (Formato tradicional)
+        if (idxNombres !== -1)
+          nombres = String(row[idxNombres] || "SIN NOMBRE").trim();
+
+        if (idxPaterno !== -1 && idxMaterno !== -1) {
+          const p = String(row[idxPaterno] || "").trim();
+          const m = String(row[idxMaterno] || "").trim();
+          apellidos = `${p} ${m}`.trim();
+        } else if (idxApellidosGeneral !== -1) {
+          apellidos = String(row[idxApellidosGeneral] || "").trim();
+          // Truco por si el Excel exportado de Nisira pone "APELLIDO, NOMBRE" en la columna Nombres
+          if (apellidos === "" && idxNombres !== -1) {
+            const completo = String(row[idxNombres]).trim();
+            if (completo.includes(",")) {
+              apellidos = completo.split(",")[0].trim();
+              nombres = completo.split(",")[1].trim();
+            }
+          }
+        } else if (idxPaterno !== -1) {
+          apellidos = String(row[idxPaterno] || "").trim();
+        }
       }
 
       if (!apellidos) apellidos = "SIN APELLIDO";
+      if (!nombres) nombres = "SIN NOMBRE";
 
+      // Extracción de Área, Cargo, Categoría y Género
       const area =
         idxArea !== -1 ? String(row[idxArea] || "General").trim() : "General";
       const cargo =
@@ -332,35 +402,57 @@ const importarExcelInteligente = async (req, res) => {
 
       let genero = "M";
       if (idxGenero !== -1) {
-        const gRaw = String(row[idxGenero]).toUpperCase();
+        const gRaw = String(row[idxGenero] || "")
+          .toUpperCase()
+          .trim();
         if (gRaw.startsWith("F") || gRaw.includes("MUJER")) genero = "F";
       }
 
+      // Guardamos en el mapa. Si el DNI se repite, se queda con la versión más abajo en el Excel
+      trabajadoresMap.set(dni, {
+        dni,
+        nombres,
+        apellidos,
+        area,
+        cargo,
+        genero,
+        categoria,
+      });
+    }
+
+    let procesados = 0;
+    let errores = 0;
+
+    // 🟢 Insertamos o actualizamos en BD (Upsert)
+    for (const [dni, data] of trabajadoresMap.entries()) {
       try {
         await prisma.trabajadores.upsert({
           where: { dni },
-          update: { nombres, apellidos, area, cargo, genero, categoria },
+          update: {
+            nombres: data.nombres,
+            apellidos: data.apellidos,
+            area: data.area,
+            cargo: data.cargo,
+            genero: data.genero,
+            categoria: data.categoria,
+            estado: true, // Reactiva si el trabajador estaba inactivo
+          },
           create: {
-            dni,
-            nombres,
-            apellidos,
-            area,
-            cargo,
-            genero,
-            categoria,
+            ...data,
             estado: true,
-            id_empresa: empresaDestino, // 🟢 NUEVO: Inyectamos la empresa aquí
+            id_empresa: empresaDestino,
           },
         });
         procesados++;
       } catch (e) {
+        console.error(`Error procesando DNI ${dni}:`, e);
         errores++;
       }
     }
 
     res.json({ mensaje: "Importación finalizada", procesados, errores });
   } catch (error) {
-    console.error(error);
+    console.error("Error general en importación:", error);
     res.status(500).json({ error: "Error procesando Excel" });
   }
 };
@@ -379,13 +471,12 @@ const eliminarFirma = async (req, res) => {
   }
 };
 
-// 🟢 8. ACTUALIZAR TRABAJADOR (CON FIRMA)
+// 8. ACTUALIZAR TRABAJADOR
 const actualizarTrabajador = async (req, res) => {
   try {
     const { id } = req.params;
     const { id_trabajador, ...datos } = req.body;
 
-    // Si viene nueva imagen, la subimos
     if (req.file) {
       console.log("📤 Actualizando firma en Firebase...");
       const result = await uploadFromBuffer(
@@ -413,6 +504,8 @@ module.exports = {
   buscarPorDNI,
   guardarTrabajador,
   eliminarTrabajador,
+  vaciarTrabajadores,
+  eliminarVariosTrabajadores,
   cargaMasivaFirmas,
   getTrabajadoresSelect,
   importarExcelInteligente,

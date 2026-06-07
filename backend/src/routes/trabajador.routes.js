@@ -30,6 +30,16 @@ router.post(
   controller.importarExcelInteligente,
 );
 
+// 🟢 NUEVO: Vaciar todos los trabajadores (Por empresa)
+router.delete("/vaciar", verificarToken, controller.vaciarTrabajadores);
+
+// 🟢 NUEVO: Eliminar varios trabajadores seleccionados
+router.post(
+  "/eliminar-varios",
+  verificarToken,
+  controller.eliminarVariosTrabajadores,
+);
+
 // --- RUTAS GENERALES ---
 router.get("/", verificarToken, controller.obtenerTrabajadores);
 

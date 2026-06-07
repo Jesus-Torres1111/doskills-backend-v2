@@ -293,12 +293,10 @@ const importarExcelInteligente = async (req, res) => {
     }
 
     if (rawData.length < 2) {
-      return res
-        .status(400)
-        .json({
-          error:
-            "No se encontró una hoja válida con datos reales de trabajadores.",
-        });
+      return res.status(400).json({
+        error:
+          "No se encontró una hoja válida con datos reales de trabajadores.",
+      });
     }
     // --- 🟢 FIN DE LA BÚSQUEDA DE HOJA ---
 
@@ -316,8 +314,8 @@ const importarExcelInteligente = async (req, res) => {
     ]);
     const idxCargo = findCol(["cargo", "puesto", "ocupacion"]);
     const idxGenero = findCol(["genero", "sexo"]);
-    const idxCategoria = findCol(["categoria", "grupo"]);
-
+    const idxCategoria = findCol(["categoria", "grupo", "comite"]);
+    
     // Nombres y Apellidos
     const idxNombres = findCol(["nombres", "nombre", "colaborador"]);
     const idxApellidosGeneral = findCol(["apellidos", "apellido"]);
@@ -390,34 +388,54 @@ const importarExcelInteligente = async (req, res) => {
       if (!apellidos) apellidos = "SIN APELLIDO";
       if (!nombres) nombres = "SIN NOMBRE";
 
-      // Extracción de Área, Cargo, Categoría y Género
+      // Extracción de Área, Cargo y Categoría
       const area =
-        idxArea !== -1 ? String(row[idxArea] || "General").trim() : "General";
+        idxArea !== -1 && row[idxArea]
+          ? String(row[idxArea]).trim()
+          : "General";
       const cargo =
-        idxCargo !== -1
-          ? String(row[idxCargo] || "Trabajador").trim()
+        idxCargo !== -1 && row[idxCargo]
+          ? String(row[idxCargo]).trim()
           : "Trabajador";
       const categoria =
-        idxCategoria !== -1 ? String(row[idxCategoria] || "").trim() : null;
+        idxCategoria !== -1 && row[idxCategoria]
+          ? String(row[idxCategoria]).trim()
+          : null;
 
-      let genero = "M";
-      if (idxGenero !== -1) {
-        const gRaw = String(row[idxGenero] || "")
-          .toUpperCase()
-          .trim();
-        if (gRaw.startsWith("F") || gRaw.includes("MUJER")) genero = "F";
+      // Extraemos el género SOLO si la celda tiene un valor
+      let generoExtraido = null;
+      if (idxGenero !== -1 && row[idxGenero]) {
+        const gRaw = String(row[idxGenero]).toUpperCase().trim();
+        if (gRaw.startsWith("F") || gRaw.includes("MUJER"))
+          generoExtraido = "F";
+        else generoExtraido = "M"; // Si hay algo escrito que no es mujer, asumimos M
       }
 
-      // Guardamos en el mapa. Si el DNI se repite, se queda con la versión más abajo en el Excel
-      trabajadoresMap.set(dni, {
-        dni,
-        nombres,
-        apellidos,
-        area,
-        cargo,
-        genero,
-        categoria,
-      });
+      // 🟢 LÓGICA DE FUSIÓN (MERGE) PARA DUPLICADOS
+      if (trabajadoresMap.has(dni)) {
+        const dataPrevia = trabajadoresMap.get(dni);
+
+        // 1. Actualizamos los datos laborales con la fila más reciente
+        dataPrevia.area = area !== "General" ? area : dataPrevia.area;
+        dataPrevia.cargo = cargo !== "Trabajador" ? cargo : dataPrevia.cargo;
+        if (categoria) dataPrevia.categoria = categoria;
+
+        // 2. Rescatamos los datos personales previos si la nueva fila los perdió
+        if (nombres !== "SIN NOMBRE") dataPrevia.nombres = nombres;
+        if (apellidos !== "SIN APELLIDO") dataPrevia.apellidos = apellidos;
+        if (generoExtraido) dataPrevia.genero = generoExtraido; // Solo cambia si la nueva fila SÍ trajo género
+      } else {
+        // Es la primera vez que vemos este DNI, lo guardamos normal
+        trabajadoresMap.set(dni, {
+          dni,
+          nombres,
+          apellidos,
+          area,
+          cargo,
+          genero: generoExtraido || "M", // Por defecto M solo en el primer registro si viene vacío
+          categoria,
+        });
+      }
     }
 
     let procesados = 0;

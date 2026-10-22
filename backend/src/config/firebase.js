@@ -1,12 +1,12 @@
-//backend/src/config/firebase.js
-
+// backend/src/config/firebase.js
 const admin = require("firebase-admin");
 require("dotenv").config();
+
+let storage = null;
 
 try {
   let privateKey = process.env.FIREBASE_PRIVATE_KEY;
 
-  // Limpiamos la llave por si se colaron comillas extra en el .env
   if (privateKey) {
     privateKey = privateKey.replace(/^"|"$/g, "").replace(/\\n/g, "\n");
   }
@@ -17,15 +17,20 @@ try {
     privateKey: privateKey,
   };
 
-  admin.initializeApp({
-    credential: admin.credential.cert(serviceAccount),
-    storageBucket: process.env.FIREBASE_STORAGE_BUCKET,
-  });
+  // Solo inicializa si las credenciales existen en el .env
+  if (serviceAccount.projectId && serviceAccount.privateKey) {
+    admin.initializeApp({
+      credential: admin.credential.cert(serviceAccount),
+      storageBucket: process.env.FIREBASE_STORAGE_BUCKET,
+    });
 
-  console.log("🔥 Firebase Admin configurado con variables de entorno (.env).");
+    storage = admin.storage().bucket();
+    console.log("🔥 Firebase Admin configurado con variables de entorno (.env).");
+  } else {
+    console.warn("⚠️ Firebase Admin no configurado (faltan variables en .env). El servidor funcionará, pero la subida de fotos a la nube estará deshabilitada.");
+  }
 } catch (error) {
   console.error("❌ Error configurando Firebase Admin:", error.message);
 }
 
-const storage = admin.storage().bucket();
 module.exports = { admin, storage };
